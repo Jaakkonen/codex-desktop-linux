@@ -555,7 +555,7 @@ function applySliderMinimumPatch(source, context = {}) {
 function localComposerResolverSection(source) {
   return uniqueFunctionWithMarkers(source, [
     "sliderModelsConfig:",
-    "includeUltraInSlider:",
+    "removeXHigh:",
     "stripGptPrefix:",
     ".presets){",
   ]);
