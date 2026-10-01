@@ -985,7 +985,7 @@ mod replacement_tests {
             fs::{OpenOptionsExt, PermissionsExt},
         },
         path::{Path, PathBuf},
-        process::{Command, Stdio},
+        process::{Child, Command, Stdio},
         thread,
         time::Duration,
     };
@@ -2362,6 +2362,61 @@ exit 90
         Ok(())
     }
 
+    fn spawn_staged_executable(command: &mut Command) -> io::Result<Child> {
+        const MAX_ATTEMPTS: usize = 100;
+
+        for attempt in 1..=MAX_ATTEMPTS {
+            match command.spawn() {
+                Err(error)
+                    if error.raw_os_error() == Some(libc::ETXTBSY) && attempt < MAX_ATTEMPTS =>
+                {
+                    thread::sleep(Duration::from_millis(10));
+                }
+                result => return result,
+            }
+        }
+
+        unreachable!("the bounded spawn loop always returns")
+    }
+
+    #[test]
+    fn staged_executable_spawn_retries_text_file_busy() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let installed = temp.path().join("codex-update-manager");
+        stage_executable(&env::current_exe()?, &installed)?;
+
+        let writer = OpenOptions::new().write(true).open(&installed)?;
+        let immediate_error = Command::new(&installed)
+            .status()
+            .expect_err("an executable open for writing must not start");
+        assert_eq!(immediate_error.raw_os_error(), Some(libc::ETXTBSY));
+
+        let release_writer = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(50));
+            drop(writer);
+        });
+        let status = spawn_staged_executable(
+            Command::new(&installed)
+                .args([
+                    "app::replacement_tests::install_ready_replacement_process_fixture",
+                    "--exact",
+                    "--nocapture",
+                ])
+                .stdout(Stdio::null())
+                .stderr(Stdio::null()),
+        )?
+        .wait()?;
+        release_writer
+            .join()
+            .expect("writer release thread panicked");
+
+        assert!(
+            status.success(),
+            "staged updater failed after ETXTBSY cleared"
+        );
+        Ok(())
+    }
+
     #[tokio::test]
     async fn install_ready_replacement_process_fixture() -> Result<()> {
         let Some(mode) = env::var_os("CODEX_INSTALL_READY_FIXTURE_MODE") else {
@@ -2432,21 +2487,22 @@ exit 90
         )?;
         fs::set_permissions(&fake_pkexec, fs::Permissions::from_mode(0o755))?;
 
-        let mut old = Command::new(&installed)
-            .args([
-                "app::replacement_tests::install_ready_replacement_process_fixture",
-                "--exact",
-                "--nocapture",
-            ])
-            .env("CODEX_INSTALL_READY_FIXTURE_MODE", "install")
-            .env("CODEX_INSTALL_READY_FIXTURE_ROOT", temp.path())
-            .env("CODEX_UPDATE_MANAGER_TEST_PKEXEC_PATH", &fake_pkexec)
-            .env("CODEX_TEST_INSTALL_STARTED", &install_started)
-            .env("CODEX_TEST_INSTALL_RELEASE", &install_release)
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .context("fixture: spawn installed updater")?;
+        let mut old = spawn_staged_executable(
+            Command::new(&installed)
+                .args([
+                    "app::replacement_tests::install_ready_replacement_process_fixture",
+                    "--exact",
+                    "--nocapture",
+                ])
+                .env("CODEX_INSTALL_READY_FIXTURE_MODE", "install")
+                .env("CODEX_INSTALL_READY_FIXTURE_ROOT", temp.path())
+                .env("CODEX_UPDATE_MANAGER_TEST_PKEXEC_PATH", &fake_pkexec)
+                .env("CODEX_TEST_INSTALL_STARTED", &install_started)
+                .env("CODEX_TEST_INSTALL_RELEASE", &install_release)
+                .stdout(Stdio::null())
+                .stderr(Stdio::null()),
+        )
+        .context("fixture: spawn installed updater")?;
 
         for _ in 0..500 {
             if install_started.exists() {
@@ -2541,23 +2597,24 @@ exit 90
         )?;
         fs::set_permissions(&fake_pkexec, fs::Permissions::from_mode(0o755))?;
 
-        let mut old = Command::new(&installed)
-            .args([
-                "app::replacement_tests::install_ready_replacement_process_fixture",
-                "--exact",
-                "--nocapture",
-            ])
-            .env("CODEX_INSTALL_READY_FIXTURE_MODE", "install")
-            .env("CODEX_INSTALL_READY_FIXTURE_ROOT", temp.path())
-            .env("CODEX_UPDATE_MANAGER_TEST_PKEXEC_PATH", &fake_pkexec)
-            .env("CODEX_TEST_INSTALL_STARTED", &install_started)
-            .env("CODEX_TEST_INSTALL_RELEASE", &install_release)
-            .env("CODEX_TEST_BEFORE_RESTART_READBACK", &before_readback)
-            .env("CODEX_TEST_RELEASE_RESTART_READBACK", &release_readback)
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .context("fixture: spawn installed updater")?;
+        let mut old = spawn_staged_executable(
+            Command::new(&installed)
+                .args([
+                    "app::replacement_tests::install_ready_replacement_process_fixture",
+                    "--exact",
+                    "--nocapture",
+                ])
+                .env("CODEX_INSTALL_READY_FIXTURE_MODE", "install")
+                .env("CODEX_INSTALL_READY_FIXTURE_ROOT", temp.path())
+                .env("CODEX_UPDATE_MANAGER_TEST_PKEXEC_PATH", &fake_pkexec)
+                .env("CODEX_TEST_INSTALL_STARTED", &install_started)
+                .env("CODEX_TEST_INSTALL_RELEASE", &install_release)
+                .env("CODEX_TEST_BEFORE_RESTART_READBACK", &before_readback)
+                .env("CODEX_TEST_RELEASE_RESTART_READBACK", &release_readback)
+                .stdout(Stdio::null())
+                .stderr(Stdio::null()),
+        )
+        .context("fixture: spawn installed updater")?;
 
         for _ in 0..500 {
             if install_started.exists() {
