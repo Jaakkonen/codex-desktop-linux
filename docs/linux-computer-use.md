@@ -19,7 +19,7 @@ It supports:
 - app listing and accessibility trees through AT-SPI
 - screenshots through GNOME Shell DBus, the Codex GNOME Shell extension, or XDG Desktop Portal
 - window listing and focusing on GNOME, KWin/Plasma 5 and 6, Hyprland, Niri,
-  COSMIC, i3, labwc with Selkies IPC, and generic X11/EWMH window managers; GNOME extension and X11
+  COSMIC, Umbriel, i3, labwc with Selkies IPC, and generic X11/EWMH window managers; GNOME extension and X11
   windows can also be moved and resized
 - keyboard, text, click, scroll, and drag input through `/dev/uinput`, XDG
   RemoteDesktop portal, `xdotool` on X11, or `ydotool`
@@ -382,3 +382,18 @@ targeted input. Window crops use COSMIC window geometry and logical output
 origins. Mixed-monitor mapping has fixture coverage; physical mixed-monitor
 validation remains pending. GNOME Introspect verifies existing app focus without
 opening the overview; exact activation needs the GNOME extension.
+
+## Umbriel window discovery
+
+Umbriel uses `umbriel windows --json` for discovery and
+`umbriel msg window-focus:<native-id>` for exact focus. The CLI must be on PATH
+and able to reach the active compositor through its session environment.
+The backend uses `active` for keyboard focus; Umbriel's `focused` field is
+remembered workspace-local focus. Opaque native IDs are mapped to stable numeric
+IDs, with ambiguous snapshots rejected before focus.
+
+The CLI geometry describes layout targets, so this integration does not qualify
+animated or scaled screenshot/input coordinate mapping. Workspace names are
+strings and are not exported through the backend's numeric workspace field.
+Screenshot capture and keyboard/pointer input still need independent supported
+portal or input routes; window discovery alone does not provide them.
