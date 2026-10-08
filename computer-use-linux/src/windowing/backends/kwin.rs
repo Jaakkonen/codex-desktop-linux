@@ -981,12 +981,7 @@ impl TryFrom<KwinRawWindow> for WindowInfo {
 
 fn kwin_window_id_from_uuid(uuid: &str) -> u64 {
     let normalized = normalize_kwin_uuid(uuid).unwrap_or_else(|| uuid.trim().to_ascii_lowercase());
-    let mut hash = 0xcbf29ce484222325_u64;
-    for byte in normalized.as_bytes() {
-        hash ^= u64::from(*byte);
-        hash = hash.wrapping_mul(0x100000001b3);
-    }
-    hash
+    crate::windowing::types::native_window_id(&normalized)
 }
 
 fn normalize_kwin_uuid(uuid: &str) -> Option<String> {

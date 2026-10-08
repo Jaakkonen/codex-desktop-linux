@@ -1,6 +1,6 @@
 use crate::windowing::registry::{
     self, COSMIC_WAYLAND_BACKEND, GNOME_SHELL_EXTENSION_BACKEND, GNOME_SHELL_INTROSPECT_BACKEND,
-    HYPRLAND_BACKEND, I3_BACKEND, KWIN_BACKEND, NIRI_BACKEND, X11_BACKEND,
+    HYPRLAND_BACKEND, I3_BACKEND, KWIN_BACKEND, NIRI_BACKEND, UMBRIEL_BACKEND, X11_BACKEND,
 };
 use crate::ydotool;
 use schemars::JsonSchema;
@@ -367,15 +367,15 @@ fn capability_map_with_portal_keyboard(
     if windowing.niri.ok {
         window_backends.push(NIRI_BACKEND.to_string());
     }
-    // i3 and the generic X11/EWMH backend have no dedicated
-    // WindowingReport field; read them from the probe map so the capability
-    // list matches the registry order.
-    if windowing
-        .backends
-        .get(I3_BACKEND)
-        .is_some_and(|check| check.ok)
-    {
-        window_backends.push(I3_BACKEND.to_string());
+    // Backends without dedicated legacy report fields use the probe map.
+    for backend in [UMBRIEL_BACKEND, I3_BACKEND] {
+        if windowing
+            .backends
+            .get(backend)
+            .is_some_and(|check| check.ok)
+        {
+            window_backends.push(backend.to_string());
+        }
     }
     if x11_available && !prefer_x11_over_introspect {
         window_backends.push(X11_BACKEND.to_string());
@@ -2422,6 +2422,29 @@ mod tests {
         assert!(readiness.can_focus_apps);
         assert!(readiness.can_focus_windows);
         assert!(readiness.blockers.is_empty());
+    }
+
+    #[test]
+    fn capability_map_reports_umbriel_from_probe_map() {
+        let platform = platform_report();
+        let portals = portal_report(Check::fail("missing"));
+        let accessibility = accessibility_report(Check::ok("bus"), Check::ok("true"));
+        let mut windowing = windowing_report(false, false);
+        windowing
+            .backends
+            .insert(UMBRIEL_BACKEND.to_string(), Check::ok("Umbriel IPC"));
+        let capabilities = capability_map(
+            &platform,
+            &portals,
+            &accessibility,
+            &windowing,
+            &input_report(false),
+        );
+        assert_eq!(capabilities.window_control, vec![UMBRIEL_BACKEND]);
+        assert_eq!(
+            capabilities.preferred.window_control.as_deref(),
+            Some(UMBRIEL_BACKEND)
+        );
     }
 
     #[test]

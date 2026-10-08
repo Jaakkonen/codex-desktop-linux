@@ -104,3 +104,13 @@ impl WindowTarget {
                 .is_some_and(|value| !value.trim().is_empty())
     }
 }
+
+// Stable numeric bridge for opaque native IDs, preserving the KWin ID contract.
+pub(crate) fn native_window_id(id: &str) -> u64 {
+    let mut hash = 0xcbf29ce484222325_u64;
+    for byte in id.as_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    hash
+}
