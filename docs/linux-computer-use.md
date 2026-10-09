@@ -275,9 +275,12 @@ nix run github:ilysenko/codex-desktop-linux#codex-desktop-computer-use-ui-remote
 Umbriel uses `umbriel windows --json` for discovery and
 `umbriel msg window-focus:<native-id>` for exact focus. The CLI must be on PATH
 and able to reach the active compositor through its session environment.
-The backend uses `active` for keyboard focus; Umbriel's `focused` field is
+The backend requires `keyboard_focused` to verify keyboard focus. `active` can
+identify an overview card while overview owns the keyboard; Umbriel's `focused` field is
 remembered workspace-local focus. Opaque native IDs are mapped to stable numeric
 IDs, with ambiguous snapshots rejected before focus.
+Compositors without `keyboard_focused` support discovery only: the backend
+reports focus verification unavailable and refuses window activation.
 
 The CLI geometry describes layout targets, so this integration does not qualify
 animated or scaled screenshot/input coordinate mapping. Workspace names are

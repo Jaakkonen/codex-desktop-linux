@@ -11,26 +11,33 @@ use tokio::process::Command;
 pub const UMBRIEL_BACKEND: &str = "umbriel";
 
 pub fn probe() -> BackendProbe {
-    let result = StdCommand::new("umbriel")
-        .args(["windows", "--json"])
-        .output();
-    let readiness = result.map_err(anyhow::Error::from).and_then(|output| {
-        if !output.status.success() {
-            bail!(
-                "umbriel windows --json failed: {}",
-                String::from_utf8_lossy(&output.stderr)
-            );
-        }
-        parse_windows(&String::from_utf8_lossy(&output.stdout))
+    let mut command = StdCommand::new("umbriel");
+    command.args(["windows", "--json"]);
+    let readiness = command_runner::output_blocking(&mut command, "probe Umbriel windows")
+        .and_then(|output| {
+            if !output.status.success() {
+                bail!(
+                    "umbriel windows --json failed: {}",
+                    String::from_utf8_lossy(&output.stderr)
+                );
+            }
+            parse_windows(&String::from_utf8_lossy(&output.stdout))
+        });
+    let can_verify_focus = readiness.as_ref().is_ok_and(|windows| {
+        !windows.is_empty()
+            && windows
+                .iter()
+                .all(|window| window.keyboard_focused.is_some())
     });
     BackendProbe {
         id: UMBRIEL_BACKEND,
         ok: readiness.is_ok(),
         can_list_windows: readiness.is_ok(),
-        can_focus_apps: readiness.is_ok(),
-        can_focus_windows: readiness.is_ok(),
+        can_focus_apps: can_verify_focus,
+        can_focus_windows: can_verify_focus,
         detail: match readiness {
-            Ok(_) => "Umbriel JSON window IPC is available".to_string(),
+            Ok(_) if can_verify_focus => "Umbriel JSON window IPC and keyboard-focus verification are available".to_string(),
+            Ok(_) => "Umbriel window discovery is available, but keyboard-focus verification is unavailable".to_string(),
             Err(error) => format!("Umbriel window IPC unavailable: {error:#}"),
         },
     }
@@ -83,6 +90,9 @@ pub async fn activate_window(window_id: u64) -> Result<()> {
         .into_iter()
         .find(|window| native_window_id(&window.id) == window_id)
         .with_context(|| format!("No Umbriel window matched window_id {window_id}"))?;
+    if native.keyboard_focused.is_none() {
+        bail!("Umbriel window IPC does not expose keyboard_focused; refusing unverified window activation");
+    }
     let mut command = Command::new("umbriel");
     command.args(["msg", &format!("window-focus:{}", native.id)]);
     let output = command_runner::output(command, "focus Umbriel window").await?;
@@ -105,7 +115,7 @@ struct UmbrielWindow {
     y: i32,
     w: u32,
     h: u32,
-    active: bool,
+    keyboard_focused: Option<bool>,
     xwayland: bool,
     #[serde(default)]
     tab_hidden: bool,
@@ -129,9 +139,8 @@ impl From<UmbrielWindow> for WindowInfo {
                 height: window.h,
             }),
             workspace: None,
-            // `focused` in Umbriel is remembered per-workspace focus, while
-            // `active` identifies the seat's currently activated window.
-            focused: window.active,
+            // Activation can identify an overview card without keyboard focus.
+            focused: window.keyboard_focused.unwrap_or(false),
             hidden: window.tab_hidden,
             client_type: Some(if window.xwayland { "x11" } else { "wayland" }.to_string()),
             backend: UMBRIEL_BACKEND.to_string(),
@@ -154,6 +163,21 @@ mod tests {
         assert_eq!(window.pid, Some(123));
         assert_eq!(window.bounds.unwrap().x, Some(-100));
         assert_eq!(window.client_type.as_deref(), Some("wayland"));
+    }
+
+    #[test]
+    fn overview_activation_is_not_keyboard_focus() {
+        let active = WINDOW.replace("\"active\":false", "\"active\":true");
+        for extra in [
+            "",
+            ",\"keyboard_focused\":false",
+            ",\"keyboard_focused\":true",
+        ] {
+            let json = format!("[{}{extra}}}]", active.trim_end_matches('}'));
+            let records = parse_windows(&json).unwrap();
+            let window = WindowInfo::from(records.into_iter().next().unwrap());
+            assert_eq!(window.focused, extra.ends_with("true"));
+        }
     }
 
     #[test]

@@ -104,7 +104,7 @@ const DESCRIPTORS: &[BackendDescriptor] = &[
     BackendDescriptor {
         id: UMBRIEL_BACKEND,
         failure_label: "Umbriel",
-        list_note: "Window list came from Umbriel CLI JSON IPC. Window IDs bridge opaque native identifiers; active reports seat-global focus.",
+        list_note: "Window list came from Umbriel CLI JSON IPC. Window IDs bridge opaque native identifiers; keyboard_focused verifies keyboard focus when the compositor exposes it.",
         missing_hint: "On Umbriel, ensure umbriel windows --json can reach the active compositor.",
         can_exact_focus: true,
     },
