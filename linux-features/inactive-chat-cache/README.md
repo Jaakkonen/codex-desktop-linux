@@ -9,9 +9,16 @@ inactive chats for lower retained history and per-chat helper memory.
 ```json
 {
   "enabled": ["inactive-chat-cache"],
-  "settings": {"inactive-chat-cache": {"maximumInactiveOwners": 2}}
+  "settings": {"inactive-chat-cache": {"maximumInactiveOwners": 2, "maximumRetainedScopes": 2}}
 }
 ```
+
+`maximumRetainedScopes` separately bounds the native ThreadScope and RouteScope
+LRU caches (zero to twenty, default twenty). These retained UI scopes can keep
+visited chat history subscriptions alive after navigation. The native LRU
+excludes mounted scopes and runs its existing disposal lifecycle when evicting
+an unmounted scope. Composer drafts use the upstream global persisted draft
+store rather than this retained scope cache. No new scheduler is introduced.
 
 The transform changes the native cache count in the main companion and
 webview bundles. It also repeats the existing activity/follower/keep-loaded
@@ -38,6 +45,9 @@ For Nix, the package override accepts both `linuxFeatureIds` and
 ```nix
 codex-desktop.override {
   linuxFeatureIds = [ "inactive-chat-cache" ];
-  linuxFeatureSettings.inactive-chat-cache.maximumInactiveOwners = 2;
+  linuxFeatureSettings.inactive-chat-cache = {
+    maximumInactiveOwners = 2;
+    maximumRetainedScopes = 2;
+  };
 }
 ```
