@@ -492,6 +492,23 @@
               || lib.elem "record-and-replay" effectiveFeatureIds;
             workspaceHelpers = mkWorkspaceHelpers effectiveFeatureIds;
             watchboundEnabled = lib.elem "directory-only-working-tree-watch" effectiveFeatureIds;
+            # This addon is already linked by Nix before its authenticated
+            # package metadata and ASAR header are generated. A second ELF
+            # rewrite invalidates both the recorded length and SHA-256.
+            watchboundAddon = "resources/app.asar.unpacked/node_modules/@gadicc/watchbound-node-${watchboundTarget.id}/${watchboundTarget.binary}";
+            elfManifest = builtins.fromJSON (builtins.readFile ./nix/elf-runtime-manifest.json);
+            installedElfManifest = pkgs.writeText "codex-installed-elf-runtime.json" (builtins.toJSON (
+              elfManifest // {
+                architectures = lib.mapAttrs (arch: contract:
+                  contract // {
+                    interpreterStrategies = contract.interpreterStrategies
+                      // lib.optionalAttrs (watchboundEnabled && arch == officialPackage.architecture) {
+                        "${watchboundAddon}" = "preserve-upstream";
+                      };
+                  }
+                ) elfManifest.architectures;
+              }
+            ));
             codexMicroEnabled = lib.elem "codex-micro" effectiveFeatureIds;
             featuresConfig = pkgs.writeText "codex-linux-features.json" (builtins.toJSON {
               enabled = effectiveFeatureIds;
@@ -566,12 +583,18 @@
                 --require-enabled-feature nix-store-bundled-marketplace-permissions
               dynamic_linker="$(cat ${pkgs.stdenv.cc}/nix-support/dynamic-linker)"
               node "$source_dir/nix/elf-runtime.cjs" fix \
+                --manifest "${installedElfManifest}" \
                 --root "$app" \
                 --arch ${officialPackage.architecture} \
                 --dynamic-linker "$dynamic_linker" \
                 --runtime-library-path "${runtimeLibraryPath}" \
                 --patchelf "${pkgs.patchelf}/bin/patchelf" \
                 --chatgpt-relocator "$source_dir/nix/relocate-elf-interpreter.cjs"
+              ${lib.optionalString watchboundEnabled ''
+              # Fail closed if a later packaging step altered the prelinked addon.
+              cmp "${watchboundPackage}/lib/node_modules/@gadicc/watchbound-node-${watchboundTarget.id}/${watchboundTarget.binary}" \
+                "$app/${watchboundAddon}"
+              ''}
               patchShebangs --build "$app"
 
               install -Dm0644 "$app/.codex-linux/codex-desktop.png" \
@@ -604,6 +627,7 @@
                 --set-default CODEX_CLI_PATH "$app/resources/codex" \
                 --add-flags "$app/start.sh"
               node "$source_dir/nix/elf-runtime.cjs" audit \
+                --manifest "${installedElfManifest}" \
                 --root "$app" \
                 --arch ${officialPackage.architecture} \
                 --dynamic-linker "$dynamic_linker" \

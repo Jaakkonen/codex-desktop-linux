@@ -315,3 +315,11 @@ policy, logical invalidation mapping, root recovery choice, and teardown.
 ```bash
 node --test linux-features/directory-only-working-tree-watch/test.js
 ```
+
+### Nix addon integrity
+
+The controlled watchbound addon is built and linked by Nix before the package
+manifest and ASAR metadata record its bytes. The final app ELF pass preserves
+that prelinked addon and compares it byte for byte with the controlled package
+output. Rewriting it again changes its size and hash, causing the authenticated
+loader to reject it. Upstream ELF validation remains unchanged.
