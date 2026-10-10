@@ -4,8 +4,9 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const test = require("node:test");
-const { maximum, prepare, protectDispatch, apply } = require("./patch.js");
+const { maximum, prepare, protectDispatch, scopeMaximum, prepareScopes, apply } = require("./patch.js");
 
+const scopes = 'var thread=scope(`ThreadScope`,{key:e=>e.clientThreadId,parent:root,retain:{max:20}}),route=scope(`RouteScope`,{key:routeKey,parent:thread,retain:{max:20}});';
 const source = 'var k=108e5,l=15e3,m=10,C=class{params;inactiveOwnerConversationSinceById=new Map;' +
   'getInactiveOwnerConversationIdsToUnsubscribe(e){let t=[];for(let[n,r]of this.inactiveOwnerConversationSinceById.entries()){' +
   'if(this.unsubscribingConversationIds.has(n))continue;let i=this.params.threadStore.getConversation(n);' +
@@ -65,7 +66,7 @@ test("qualifies both bundles before mutation", () => {
     fs.writeFileSync(main,source);fs.writeFileSync(view,'unrecognized');
     assert.throws(()=>apply(dir,{feature:{settings:{maximumInactiveOwners:2}}}));
     assert.equal(fs.readFileSync(main,'utf8'),source);
-    fs.writeFileSync(view,source);
+    fs.writeFileSync(view,source + scopes);
     assert.deepEqual(apply(dir,{feature:{settings:{maximumInactiveOwners:2}}}),{matched:2,changed:2,maximumInactiveOwners:2});
     assert.equal(apply(dir,{feature:{settings:{maximumInactiveOwners:2}}}).changed,0);
   } finally {fs.rmSync(dir,{recursive:true,force:true});}
@@ -100,4 +101,18 @@ test("rechecks activity acquired between selection and unsubscribe dispatch", as
 test("does not touch unrelated unsubscribe methods in other classes", () => {
   const other = 'var Other=class{async unsubscribeInactiveConversation(e){return e}};';
   assert.equal(prepare(source + other, 2), prepare(source, 2) + other);
+});
+
+
+test("bounds both native scope caches without changing mounted-view safeguards", () => {
+  assert.equal(scopeMaximum(), 20);
+  for (const value of [-1, 21, 1.5, "2", null]) {
+    assert.throws(() => scopeMaximum({feature:{settings:{maximumRetainedScopes:value}}}));
+  }
+  const patched = prepareScopes(scopes, 2);
+  assert.equal(patched, scopes.replaceAll("max:20", "max:2"));
+  assert.equal(prepareScopes(patched, 2), patched);
+  assert.throws(() => prepareScopes(scopes + scopes, 2));
+  assert.throws(() => prepareScopes(scopes.replace("RouteScope", "ChangedScope"), 2));
+  assert.throws(() => prepareScopes(scopes.replace("max:20", "max:21"), 2));
 });

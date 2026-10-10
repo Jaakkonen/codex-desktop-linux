@@ -79,8 +79,33 @@ function prepare(source, limit) {
     guarded.slice(match.index).replace(before, after);
 }
 
+function scopeMaximum(context = {}) {
+  const configured = context.feature?.settings?.maximumRetainedScopes;
+  const value = configured === undefined ? 20 : configured;
+  if (!Number.isSafeInteger(value) || value < 0 || value > 20) {
+    throw new Error("inactive-chat-cache.maximumRetainedScopes must be an integer from 0 to 20");
+  }
+  return value;
+}
+
+function prepareScopes(source, limit) {
+  // Keep the native LRU and its mountedCount exclusion. Only its capacity changes.
+  for (const name of ["ThreadScope", "RouteScope"]) {
+    const anchor = new RegExp(
+      `(${identifier}\\(\\x60${name}\\x60,\\{key:[^;{}]+?,parent:${identifier},retain:\\{max:)(\\d+)(\\}\\}\\))`, "g",
+    );
+    const matches = [...source.matchAll(anchor)];
+    if (matches.length !== 1) throw new Error(`Expected one native ${name} retained cache`);
+    const count = Number(matches[0][2]);
+    if (count !== 20 && count !== limit) throw new Error(`Unexpected ${name} capacity`);
+    source = source.replace(anchor, (_, before, value, after) => before + limit + after);
+  }
+  return source;
+}
+
 function apply(extractedDir, context = {}) {
   const limit = maximum(context);
+  const scopeLimit = scopeMaximum(context);
   const targets = [];
   for (const directory of [".vite/build", "webview/assets"]) {
     const candidates = fs.readdirSync(path.join(extractedDir, directory))
@@ -91,7 +116,9 @@ function apply(extractedDir, context = {}) {
     if (candidates.length !== 1) {
       throw new Error(`Expected one inactive owner bundle in ${directory}`);
     }
-    targets.push({ ...candidates[0], patched: prepare(candidates[0].source, limit) });
+    const patched = prepare(candidates[0].source, limit);
+    targets.push({ ...candidates[0], patched: directory === "webview/assets"
+      ? prepareScopes(patched, scopeLimit) : patched });
   }
   // Qualify both bundles before writing either. Any failure aborts the build.
   let changed = 0;
@@ -105,7 +132,7 @@ function apply(extractedDir, context = {}) {
 }
 
 module.exports = {
-  maximum, prepare, protectDispatch, apply,
+  maximum, prepare, protectDispatch, scopeMaximum, prepareScopes, apply,
   descriptors: [{
     id: "owner-count", phase: "extracted-app:pre-webview", order: 20950,
     ciPolicy: "opt-in", apply,
