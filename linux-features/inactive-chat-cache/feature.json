@@ -1,0 +1,7 @@
+{
+  "id": "inactive-chat-cache",
+  "title": "Inactive Chat Cache Size",
+  "description": "Configures the existing inactive owner cache without changing activity or subscription safeguards.",
+  "defaultEnabled": false,
+  "entrypoints": { "patchDescriptors": "./patch.js" }
+}
