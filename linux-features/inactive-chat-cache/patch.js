@@ -10,6 +10,30 @@ const initialization = new RegExp(
   `${identifier}=class\\{params;inactiveOwnerConversationSinceById=new Map`, "g",
 );
 const selector = "getInactiveOwnerConversationIdsToUnsubscribe(e){";
+const unsubscribe = "async unsubscribeInactiveConversation(e){";
+
+function protectDispatch(source) {
+  const start = source.indexOf(unsubscribe);
+  if (start < 0 || source.indexOf(unsubscribe, start + unsubscribe.length) >= 0) {
+    throw new Error("Expected one inactive owner unsubscribe method");
+  }
+  const brace = start + unsubscribe.length - 1;
+  const end = findMatchingBrace(source, brace);
+  const body = source.slice(brace + 1, end);
+  const guards = [...body.matchAll(new RegExp(
+    "if\\((" + identifier + ")\\?\\.resumeState!==`resumed`\\|\\|!this\\.params\\.streamState\\.ownsConversationHistoryStream\\(e\\)", "g",
+  ))];
+  if (guards.length !== 1) throw new Error("Inactive owner unsubscribe precondition changed");
+  const conversation = guards[0][1];
+  const prefix = guards[0][0];
+  const original = prefix + "){";
+  const guarded = prefix + "||this.hasActiveConversationView(e)" +
+    "||this.hasOwnedStreamFollowers(e)" +
+    `||this.shouldKeepConversationLoaded(${conversation})){`;
+  if (body.includes(guarded)) return source;
+  if (!body.includes(original)) throw new Error("Unexpected inactive owner unsubscribe activity guard");
+  return source.slice(0, brace + 1) + body.replace(original, guarded) + source.slice(end);
+}
 
 function maximum(context = {}) {
   const configured = context.feature?.settings?.maximumInactiveOwners;
@@ -47,8 +71,12 @@ function prepare(source, limit) {
   }
   const before = `${ttl}=108e5,${retry}=15e3,${count}=${existing},`;
   const after = `${ttl}=108e5,${retry}=15e3,${count}=${limit},`;
-  return source.slice(0, match.index) +
-    source.slice(match.index).replace(before, after);
+  const classStart = match.index + match[0].indexOf("class{");
+  const classEnd = findMatchingBrace(source, classStart + "class".length);
+  const guarded = source.slice(0, classStart) +
+    protectDispatch(source.slice(classStart, classEnd + 1)) + source.slice(classEnd + 1);
+  return guarded.slice(0, match.index) +
+    guarded.slice(match.index).replace(before, after);
 }
 
 function apply(extractedDir, context = {}) {
@@ -77,7 +105,7 @@ function apply(extractedDir, context = {}) {
 }
 
 module.exports = {
-  maximum, prepare, apply,
+  maximum, prepare, protectDispatch, apply,
   descriptors: [{
     id: "owner-count", phase: "extracted-app:pre-webview", order: 20950,
     ciPolicy: "opt-in", apply,
