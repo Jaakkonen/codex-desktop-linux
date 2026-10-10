@@ -51,6 +51,14 @@ They accept `maxWidth`, `maxHeight`, `maxBytes`, `scale`, `format`, and `quality
 sets. Use these limits to request more detail deliberately instead of repeatedly
 loading a large default observation.
 
+Umbriel uses `umbriel outputs --json` for authoritative logical geometry. Its
+noninteractive Screenshot portal captures one output; the helper maps that image
+only when its pixel dimensions identify exactly one enabled, powered output.
+Equal-sized outputs and mismatched captures are rejected. The RemoteDesktop
+portal must supply the selected monitor's logical position and size. Targeted
+clicks retain exact keyboard-focus verification, shared-stream containment, and
+layout revalidation before input.
+
 Native control retains OS permission requirements and target-window focus
 checks. Consequential-action approval remains the host/model's responsibility;
 Linux does not provide saved per-app approvals through this integration.

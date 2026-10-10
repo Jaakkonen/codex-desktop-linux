@@ -100,12 +100,12 @@ struct PortalStream {
 }
 
 #[derive(Debug, Clone)]
-struct LogicalMonitor {
-    x: i32,
-    y: i32,
-    width: i32,
-    height: i32,
-    scale: f64,
+pub(crate) struct LogicalMonitor {
+    pub(crate) x: i32,
+    pub(crate) y: i32,
+    pub(crate) width: i32,
+    pub(crate) height: i32,
+    pub(crate) scale: f64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -239,6 +239,73 @@ fn portal_input_lock() -> Arc<AsyncMutex<()>> {
     Arc::clone(INPUT_LOCK.get_or_init(|| Arc::new(AsyncMutex::new(()))))
 }
 
+#[derive(serde::Deserialize)]
+struct UmbrielOutput {
+    enabled: bool,
+    powered: bool,
+    position: UmbrielPosition,
+    logical_size: UmbrielSize,
+    scale: f64,
+}
+#[derive(serde::Deserialize)]
+struct UmbrielPosition {
+    x: i32,
+    y: i32,
+}
+#[derive(serde::Deserialize)]
+struct UmbrielSize {
+    width: i32,
+    height: i32,
+}
+
+pub(crate) async fn umbriel_monitor_layout() -> Option<Vec<LogicalMonitor>> {
+    let mut command = Command::new("umbriel");
+    command.args(["outputs", "--json"]);
+    let output = command_runner::output(command, "query Umbriel output layout")
+        .await
+        .ok()?;
+    output.status.success().then_some(())?;
+    parse_umbriel_monitor_layout(&output.stdout)
+}
+
+fn parse_umbriel_monitor_layout(json: &[u8]) -> Option<Vec<LogicalMonitor>> {
+    let outputs: Vec<UmbrielOutput> = serde_json::from_slice(json).ok()?;
+    let layout = outputs
+        .into_iter()
+        .filter(|output| output.enabled && output.powered)
+        .map(|output| {
+            (output.logical_size.width > 0
+                && output.logical_size.height > 0
+                && output.scale.is_finite()
+                && output.scale > 0.0)
+                .then_some(LogicalMonitor {
+                    x: output.position.x,
+                    y: output.position.y,
+                    width: output.logical_size.width,
+                    height: output.logical_size.height,
+                    scale: output.scale,
+                })
+        })
+        .collect::<Option<Vec<_>>>()?;
+    (!layout.is_empty()).then_some(layout)
+}
+
+/// Umbriel's noninteractive Screenshot portal captures one output. Dimensions
+/// alone are sufficient only when exactly one authoritative output matches.
+/// Never infer a full desktop or choose between equal-sized outputs.
+pub(crate) fn umbriel_capture_monitor(
+    layout: &[LogicalMonitor],
+    width: u32,
+    height: u32,
+) -> Option<LogicalMonitor> {
+    let mut matches = layout.iter().filter(|monitor| {
+        (f64::from(monitor.width) * monitor.scale - f64::from(width)).abs() < 1.0
+            && (f64::from(monitor.height) * monitor.scale - f64::from(height)).abs() < 1.0
+    });
+    let monitor = matches.next()?.clone();
+    matches.next().is_none().then_some(monitor)
+}
+
 async fn logical_desktop_layout() -> Option<Vec<LogicalMonitor>> {
     if env_token_contains("XDG_CURRENT_DESKTOP", "gnome") {
         if let Some(layout) = crate::windowing::backends::gnome::extension_monitor_layout()
@@ -267,6 +334,11 @@ async fn logical_desktop_layout() -> Option<Vec<LogicalMonitor>> {
                 return Some(layout);
             }
         }
+    }
+
+    if env_token_contains("XDG_CURRENT_DESKTOP", "umbriel") {
+        // Do not fall back to XWayland's unrelated monitor coordinates.
+        return umbriel_monitor_layout().await;
     }
 
     if env_token_contains("XDG_CURRENT_DESKTOP", "hyprland") {
@@ -1041,14 +1113,21 @@ impl PortalPointerSession {
         capture_size: Option<(u32, u32)>,
     ) -> Option<(i32, i32)> {
         let (width, height) = capture_size?;
-        map_capture_point_to_stream_layout(
-            &self.streams,
-            self.desktop_layout.as_deref()?,
-            x,
-            y,
-            width,
-            height,
-        )
+        let layout = self.desktop_layout.as_deref()?;
+        if env_token_contains("XDG_CURRENT_DESKTOP", "umbriel") {
+            let monitor = umbriel_capture_monitor(layout, width, height)?;
+            // The selected capture must itself be shared. Preserve the global
+            // point check in map_absolute_point as well as layout revalidation.
+            return map_capture_point_to_stream_layout(
+                &self.streams,
+                &[monitor],
+                x,
+                y,
+                width,
+                height,
+            );
+        }
+        map_capture_point_to_stream_layout(&self.streams, layout, x, y, width, height)
     }
 
     fn map_absolute_point(&self, x: i32, y: i32) -> Result<(u32, f64, f64)> {
@@ -3188,5 +3267,42 @@ mod tests {
         fn drop(&mut self) {
             let _ = std::fs::remove_dir_all(&self.path);
         }
+    }
+    #[test]
+    fn umbriel_capture_preserves_nonzero_origin_and_refuses_ambiguity() {
+        let layout = parse_umbriel_monitor_layout(br#"[
+          {"enabled":true,"powered":true,"position":{"x":760,"y":1440},"logical_size":{"width":1920,"height":1200},"scale":1},
+          {"enabled":true,"powered":true,"position":{"x":-3440,"y":0},"logical_size":{"width":1720,"height":720},"scale":2}
+        ]"#).unwrap();
+        let captured = umbriel_capture_monitor(&layout, 1920, 1200).unwrap();
+        let streams = [PortalStream {
+            node_id: 1,
+            position: Some((760, 1440)),
+            size: Some((1920, 1200)),
+            pixel_scale: 1.0,
+        }];
+        assert_eq!(
+            map_capture_point_to_stream_layout(&streams, &[captured], 100, 200, 1920, 1200),
+            Some((860, 1640))
+        );
+        assert_eq!(
+            umbriel_capture_monitor(&layout, 3440, 1440).unwrap().x,
+            -3440
+        );
+        assert!(map_capture_point_to_stream_layout(
+            &streams,
+            &[layout[1].clone()],
+            100,
+            200,
+            3440,
+            1440,
+        )
+        .is_none()); // Capturing another output does not grant pointer access.
+
+        assert!(
+            umbriel_capture_monitor(&[layout[0].clone(), layout[0].clone()], 1920, 1200).is_none()
+        );
+        assert!(umbriel_capture_monitor(&layout, 3440, 2640).is_none());
+        assert!(parse_umbriel_monitor_layout(br#"[{"enabled":true,"powered":true,"position":{"x":0,"y":0},"logical_size":{"width":0,"height":1},"scale":1}]"#).is_none());
     }
 }

@@ -3541,6 +3541,19 @@ impl ComputerUseLinux {
                         .map(|monitor| (monitor.x, monitor.y, monitor.width, monitor.height))
                         .collect()
                 })
+        } else if window.backend == crate::windowing::backends::umbriel::UMBRIEL_BACKEND {
+            let layout = crate::remote_desktop::umbriel_monitor_layout()
+                .await
+                .ok_or_else(|| anyhow::anyhow!("Umbriel output layout is unavailable"))?;
+            let monitor = crate::remote_desktop::umbriel_capture_monitor(
+                &layout,
+                capture_width,
+                capture_height,
+            )
+            .ok_or_else(|| {
+                anyhow::anyhow!("Umbriel screenshot output is ambiguous or unavailable")
+            })?;
+            Some(vec![(monitor.x, monitor.y, monitor.width, monitor.height)])
         } else if window.backend == KWIN_BACKEND {
             Some(vec![
                 crate::windowing::backends::kwin::logical_desktop_rect()
@@ -3578,7 +3591,10 @@ impl ComputerUseLinux {
             .unwrap_or(&focus.requested_window);
         if !matches!(
             window.backend.as_str(),
-            GNOME_SHELL_EXTENSION_BACKEND | GNOME_SHELL_INTROSPECT_BACKEND | KWIN_BACKEND
+            GNOME_SHELL_EXTENSION_BACKEND
+                | GNOME_SHELL_INTROSPECT_BACKEND
+                | KWIN_BACKEND
+                | crate::windowing::backends::umbriel::UMBRIEL_BACKEND
         ) {
             let full_capture_rect = window
                 .bounds
@@ -6962,6 +6978,44 @@ mod tests {
             portal_rect: Some((-50, -40, 100, 100)),
         };
         assert_eq!(clipped.portal_point(0, 0), Some((0, 0)));
+    }
+
+    #[tokio::test]
+    async fn umbriel_window_relative_click_uses_capture_origin_and_logical_portal_point() {
+        let root =
+            std::env::temp_dir().join(format!("umbriel-click-layout-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let command = root.join("umbriel");
+        std::fs::write(&command, r#"#!/bin/sh
+[ "$1 $2" = 'outputs --json' ] || exit 1
+printf '%s' '[{"enabled":true,"powered":true,"position":{"x":760,"y":1440},"logical_size":{"width":1920,"height":1200},"scale":1}]'
+"#).unwrap();
+        std::fs::set_permissions(&command, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let _path = EnvVarGuard::set("PATH", root.to_str().unwrap());
+        let server = ComputerUseLinux::default();
+        server.cache_desktop_size(1920, 1200);
+        let mut window = window_info(1, Some("fixture"), None, None, None);
+        window.backend = crate::windowing::backends::umbriel::UMBRIEL_BACKEND.into();
+        window.bounds = Some(WindowBounds {
+            x: Some(860),
+            y: Some(1540),
+            width: 800,
+            height: 600,
+        });
+        let focus = WindowFocusResult {
+            requested_window: window.clone(),
+            focused_window: Some(window),
+            exact_window_focused: true,
+            app_focused: true,
+            backend: "umbriel".into(),
+            note: String::new(),
+        };
+        let mapping = server.focused_window_coordinate_map(&focus).await.unwrap();
+        assert_eq!(mapping.capture_rect, (100, 100, 800, 600));
+        // A window-relative click(20,30) becomes capture(120,130), then
+        // logical desktop(880,1570), not screenshot pixels as portal input.
+        assert_eq!(mapping.portal_point(120, 130), Some((880, 1570)));
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
