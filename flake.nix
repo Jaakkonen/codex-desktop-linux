@@ -484,6 +484,7 @@
         };
         mkCodexDesktop = {
           linuxFeatureIds ? [ ],
+          linuxFeatureSettings ? { },
           enableComputerUseUi ? false,
         }:
           let
@@ -502,6 +503,7 @@
             codexMicroEnabled = lib.elem "codex-micro" effectiveFeatureIds;
             featuresConfig = pkgs.writeText "codex-linux-features.json" (builtins.toJSON {
               enabled = effectiveFeatureIds;
+              settings = linuxFeatureSettings;
             });
             suffix = if userFeatureIds == [ ] then "" else "-${lib.concatStringsSep "-" userFeatureIds}";
           in
@@ -627,6 +629,7 @@
             '';
             passthru = {
               linuxFeatureIds = userFeatureIds;
+              inherit linuxFeatureSettings;
               effectiveLinuxFeatureIds = effectiveFeatureIds;
               inherit upstreamDeb workspaceRuntimeLibraries;
               upstreamVersion = codexVersion;
