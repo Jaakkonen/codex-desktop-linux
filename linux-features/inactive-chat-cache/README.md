@@ -13,8 +13,10 @@ inactive chats for lower retained history and per-chat helper memory.
 }
 ```
 
-The transform changes only the native cache count in the main companion and
-webview bundles. Native three-hour retention, retry behavior, active views,
+The transform changes the native cache count in the main companion and
+webview bundles. It also repeats the existing activity/follower/keep-loaded
+checks immediately before unsubscribe dispatch: an inactive candidate can
+become visible or active before the scheduled unsubscribe executes. Native three-hour retention, retry behavior, active views,
 stream followers, ownership, pending requests and resume behavior are retained.
 It neither interrupts work nor kills helper processes. Backend disposal may
 lag frontend unsubscription. Reducing the count is not proof of fixing a leak.
