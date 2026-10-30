@@ -94,7 +94,7 @@ pub async fn activate_window(window_id: u64) -> Result<()> {
         bail!("Umbriel window IPC does not expose keyboard_focused; refusing unverified window activation");
     }
     let mut command = Command::new("umbriel");
-    command.args(["msg", &format!("window-focus:{}", native.id)]);
+    command.args(focus_args(&native.id));
     let output = command_runner::output(command, "focus Umbriel window").await?;
     if !output.status.success() {
         bail!(
@@ -103,6 +103,12 @@ pub async fn activate_window(window_id: u64) -> Result<()> {
         );
     }
     Ok(())
+}
+
+/// Umbriel actions take word arguments: the native ID is its own argv word,
+/// never a `name:arg` suffix, which current Umbriel rejects.
+fn focus_args(native_id: &str) -> [&str; 3] {
+    ["msg", "window-focus", native_id]
 }
 
 #[derive(Debug, Deserialize)]
@@ -190,6 +196,14 @@ mod tests {
         let b = parse_windows(&format!("[{other},{WINDOW}]")).unwrap();
         assert_eq!(native_window_id(&a[0].id), native_window_id(&b[1].id));
         assert_ne!(native_window_id(&a[0].id), native_window_id(&a[1].id));
+    }
+
+    #[test]
+    fn focus_passes_native_id_as_separate_action_word() {
+        assert_eq!(
+            focus_args("ffd00010689f4b4ded78c14a388e58ce"),
+            ["msg", "window-focus", "ffd00010689f4b4ded78c14a388e58ce"]
+        );
     }
 
     #[test]

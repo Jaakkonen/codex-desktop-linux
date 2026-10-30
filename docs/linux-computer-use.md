@@ -386,7 +386,8 @@ opening the overview; exact activation needs the GNOME extension.
 ## Umbriel window discovery
 
 Umbriel uses `umbriel windows --json` for discovery and
-`umbriel msg window-focus:<native-id>` for exact focus. The CLI must be on PATH
+`umbriel msg window-focus <native-id>` for exact focus (word arguments;
+Umbriel no longer accepts the `action:arg` form). The CLI must be on PATH
 and able to reach the active compositor through its session environment.
 The backend requires `keyboard_focused` to verify keyboard focus. `active` can
 identify an overview card while overview owns the keyboard; Umbriel's `focused` field is
