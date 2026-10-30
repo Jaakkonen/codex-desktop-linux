@@ -28,8 +28,10 @@ stream followers, ownership, pending requests and resume behavior are retained.
 It neither interrupts work nor kills helper processes. Backend disposal may
 lag frontend unsubscription. Reducing the count is not proof of fixing a leak.
 
-Bundle discovery uses the eviction method and initializer contract rather than
-release-specific filenames or symbols. Missing, duplicated or changed contracts
+Bundle discovery uses the eviction method and owner-class contract rather than
+release-specific filenames or symbols. The webview binds the TTL, retry delay
+and count to module constants; the rspack main-process chunk inlines them, so
+both count sites in the selector are qualified and changed together. Missing, duplicated or changed contracts
 abort the feature build before either bundle is modified. Signed executable
 payloads remain unchanged. Remove the feature if upstream provides a supported
 cache-size setting; no permanent divergence is intended or assumed accepted by

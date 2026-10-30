@@ -5,12 +5,18 @@ const path = require("node:path");
 const { findMatchingBrace } = require("../../scripts/patches/lib/minified-js.js");
 
 const identifier = String.raw`[A-Za-z_$][\w$]*`;
+// Vite/Rolldown bundles bind the TTL, retry delay and count to module constants.
 const initialization = new RegExp(
   `(${identifier})=108e5,(${identifier})=15e3,(${identifier})=(\\d+),` +
   `${identifier}=class\\{params;inactiveOwnerConversationSinceById=new Map`, "g",
 );
+// Every bundle declares exactly one owner class; rspack/SWC inlines its constants.
+const ownerClass = new RegExp(
+  `(?:${identifier}=class|class ${identifier})\\{params;inactiveOwnerConversationSinceById=new Map`, "g",
+);
 const selector = "getInactiveOwnerConversationIdsToUnsubscribe(e){";
 const unsubscribe = "async unsubscribeInactiveConversation(e){";
+const quoted = "(?:\\x60resumed\\x60|\"resumed\")";
 
 function protectDispatch(source) {
   const start = source.indexOf(unsubscribe);
@@ -21,18 +27,22 @@ function protectDispatch(source) {
   const end = findMatchingBrace(source, brace);
   const body = source.slice(brace + 1, end);
   const guards = [...body.matchAll(new RegExp(
-    "if\\((" + identifier + ")\\?\\.resumeState!==`resumed`\\|\\|!this\\.params\\.streamState\\.ownsConversationHistoryStream\\(e\\)", "g",
+    "if\\((" + identifier + ")\\?\\.resumeState!==" + quoted +
+    "\\|\\|!this\\.params\\.streamState\\.ownsConversationHistoryStream\\(e\\)", "g",
   ))];
   if (guards.length !== 1) throw new Error("Inactive owner unsubscribe precondition changed");
   const conversation = guards[0][1];
-  const prefix = guards[0][0];
-  const original = prefix + "){";
-  const guarded = prefix + "||this.hasActiveConversationView(e)" +
+  const at = guards[0].index + guards[0][0].length;
+  const recheck = "||this.hasActiveConversationView(e)" +
     "||this.hasOwnedStreamFollowers(e)" +
-    `||this.shouldKeepConversationLoaded(${conversation})){`;
-  if (body.includes(guarded)) return source;
-  if (!body.includes(original)) throw new Error("Unexpected inactive owner unsubscribe activity guard");
-  return source.slice(0, brace + 1) + body.replace(original, guarded) + source.slice(end);
+    `||this.shouldKeepConversationLoaded(${conversation})`;
+  const rest = body.slice(at);
+  // Both the block form `){...}` and the SWC form `)return void ...` skip dispatch.
+  if (rest.startsWith(recheck + "){") || rest.startsWith(recheck + ")return")) return source;
+  if (!rest.startsWith("){") && !rest.startsWith(")return")) {
+    throw new Error("Unexpected inactive owner unsubscribe activity guard");
+  }
+  return source.slice(0, brace + 1) + body.slice(0, at) + recheck + rest + source.slice(end);
 }
 
 function maximum(context = {}) {
@@ -44,39 +54,73 @@ function maximum(context = {}) {
   return value;
 }
 
+function occurrences(text, needle) {
+  return text.split(needle).length - 1;
+}
+
 function prepare(source, limit) {
-  const matches = [...source.matchAll(initialization)];
-  if (matches.length !== 1) throw new Error("Expected one current inactive owner cache initializer");
-  const match = matches[0];
-  const [ttl, retry, count] = match.slice(1, 4);
-  const start = source.indexOf(selector, match.index);
-  if (start < 0 || source.indexOf(selector, start + selector.length) >= 0) {
+  const classes = [...source.matchAll(ownerClass)];
+  if (classes.length !== 1) throw new Error("Expected one current inactive owner cache initializer");
+  const classStart = classes[0].index + classes[0][0].indexOf("{");
+  const classEnd = findMatchingBrace(source, classStart);
+  const start = source.indexOf(selector);
+  if (start < classStart || start > classEnd ||
+      source.indexOf(selector, start + selector.length) >= 0) {
     throw new Error("Expected one inactive owner eviction selector");
   }
   const brace = start + selector.length - 1;
-  const body = source.slice(brace + 1, findMatchingBrace(source, brace));
-  // Verify that this initializer belongs to the selector's count/TTL contract.
-  if (!body.includes(`.length-${count}`) ||
-      !body.includes(`maxInactiveOwnerThreads:${count}`) ||
-      !body.includes(`ttlMs:${ttl}`) ||
+  const selectorEnd = findMatchingBrace(source, brace);
+  const body = source.slice(brace + 1, selectorEnd);
+  const counts = [...body.matchAll(new RegExp(`\\.length-(${identifier}|\\d+)\\)`, "g"))];
+  const ttls = [...body.matchAll(new RegExp(`ttlMs:(${identifier}|108e5)\\}`, "g"))];
+  if (counts.length !== 1 || ttls.length !== 1) {
+    throw new Error("Inactive owner eviction safeguards or count contract changed");
+  }
+  const [count, ttl] = [counts[0][1], ttls[0][1]];
+  const inlined = /^\d+$/.test(count);
+  const initializers = [...source.matchAll(initialization)];
+  let retry = "15e3";
+  if (inlined) {
+    if (ttl !== "108e5" || initializers.length !== 0) {
+      throw new Error("Expected one current inactive owner cache initializer");
+    }
+  } else {
+    // A named count must come from the initializer bound to this owner class.
+    if (initializers.length !== 1 ||
+        initializers[0].index + initializers[0][0].length !== classes[0].index + classes[0][0].length ||
+        initializers[0][1] !== ttl || initializers[0][3] !== count) {
+      throw new Error("Expected one current inactive owner cache initializer");
+    }
+    retry = initializers[0][2];
+  }
+  const classBody = source.slice(classStart, classEnd + 1);
+  // Verify the selector's count/TTL contract and native activity exclusions.
+  if (occurrences(body, `.length-${count})`) !== 1 ||
+      occurrences(body, `maxInactiveOwnerThreads:${count},`) !== 1 ||
+      !body.includes(`>=${ttl}`) ||
+      (inlined && !classBody.includes(`now()+${retry};`)) ||
       !body.includes("this.hasActiveConversationView(") ||
       !body.includes("this.hasOwnedStreamFollowers(") ||
       !body.includes("this.shouldKeepConversationLoaded(") ||
       !body.includes("this.params.streamState.ownsConversationHistoryStream(")) {
     throw new Error("Inactive owner eviction safeguards or count contract changed");
   }
-  const existing = Number(match[4]);
+  const existing = Number(inlined ? count : initializers[0][4]);
   if (existing !== 10 && existing !== limit) {
     throw new Error("Unexpected inactive owner cache default");
   }
+  const guarded = source.slice(0, classStart) + protectDispatch(classBody) + source.slice(classEnd + 1);
+  if (inlined) {
+    // The selector precedes the unsubscribe method, so its offsets are unchanged.
+    const patchedBody = body
+      .replace(`.length-${count})`, `.length-${limit})`)
+      .replace(`maxInactiveOwnerThreads:${count},`, `maxInactiveOwnerThreads:${limit},`);
+    return guarded.slice(0, brace + 1) + patchedBody + guarded.slice(selectorEnd);
+  }
   const before = `${ttl}=108e5,${retry}=15e3,${count}=${existing},`;
   const after = `${ttl}=108e5,${retry}=15e3,${count}=${limit},`;
-  const classStart = match.index + match[0].indexOf("class{");
-  const classEnd = findMatchingBrace(source, classStart + "class".length);
-  const guarded = source.slice(0, classStart) +
-    protectDispatch(source.slice(classStart, classEnd + 1)) + source.slice(classEnd + 1);
-  return guarded.slice(0, match.index) +
-    guarded.slice(match.index).replace(before, after);
+  const match = initializers[0];
+  return guarded.slice(0, match.index) + guarded.slice(match.index).replace(before, after);
 }
 
 function scopeMaximum(context = {}) {
