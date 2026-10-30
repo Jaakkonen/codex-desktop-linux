@@ -116,3 +116,55 @@ test("bounds both native scope caches without changing mounted-view safeguards",
   assert.throws(() => prepareScopes(scopes.replace("RouteScope", "ChangedScope"), 2));
   assert.throws(() => prepareScopes(scopes.replace("max:20", "max:21"), 2));
 });
+
+
+// rspack/SWC main-process chunks inline the TTL, retry and count constants.
+const inlined = 'class Sg{params;inactiveOwnerConversationSinceById=new Map;' +
+  'getInactiveOwnerConversationIdsToUnsubscribe(e){let t=[];for(let[r,n]of this.inactiveOwnerConversationSinceById.entries()){' +
+  'if(this.unsubscribingConversationIds.has(r))continue;let i=this.params.threadStore.getConversation(r);' +
+  'if(i?.resumeState!=="resumed"||!this.params.streamState.ownsConversationHistoryStream(r)||this.hasActiveConversationView(r)||this.hasOwnedStreamFollowers(r)||this.shouldKeepConversationLoaded(i))continue;' +
+  'let s=this.inactiveOwnerConversationRetryAtById.get(r)??null;null!=s&&s>e||t.push({conversationId:r,inactiveSinceMs:n,isEphemeralSideConversation:Sf(i),ttlExpired:e-n>=108e5})}' +
+  't.sort((e,t)=>e.inactiveSinceMs-t.inactiveSinceMs);let r=t.filter(e=>!e.isEphemeralSideConversation),n=Math.max(0,r.length-10),i=new Set(r.slice(0,n)),s=t.filter(e=>e.ttlExpired||i.has(e)).map(e=>e.conversationId);' +
+  'return s.length>0&&this.params.logger.debug("inactive_thread_unsubscribe_candidates_evaluated",{safe:{candidateCount:t.length,conversationIdsToUnsubscribe:s,maxInactiveOwnerThreads:10,overage:n,ttlMs:108e5},sensitive:{}}),s}' +
+  'async unsubscribeInactiveConversation(e){if(this.unsubscribingConversationIds.has(e))return;let t=this.params.threadStore.getConversation(e);if(t?.resumeState!=="resumed"||!this.params.streamState.ownsConversationHistoryStream(e))return void this.params.logger.debug("inactive_thread_unsubscribe_skipped");' +
+  'this.unsubscribingConversationIds.add(e);try{return await this.params.requestClient.sendRequest("thread/unsubscribe",{threadId:e})}catch(t){let r=this.params.now()+15e3;this.inactiveOwnerConversationRetryAtById.set(e,r)}}}';
+
+test("rspack inlined count and SWC guard are patched and idempotent", async () => {
+  const patched = prepare(inlined, 2);
+  assert.equal(patched, inlined
+    .replace('r.length-10)', 'r.length-2)')
+    .replace('maxInactiveOwnerThreads:10,', 'maxInactiveOwnerThreads:2,')
+    .replace('ownsConversationHistoryStream(e))return void',
+      'ownsConversationHistoryStream(e)||this.hasActiveConversationView(e)||this.hasOwnedStreamFollowers(e)||this.shouldKeepConversationLoaded(t))return void'));
+  assert.equal(prepare(patched, 2), patched);
+  assert.equal(prepare(inlined, 10), protectDispatch(inlined));
+
+  const C = new Function('Sf', patched + 'return Sg;')(() => false);
+  const instance = new C();
+  let sent = 0;
+  instance.params = {
+    threadStore: {getConversation: () => ({resumeState: 'resumed'})},
+    streamState: {ownsConversationHistoryStream: () => true},
+    requestClient: {sendRequest: async () => {sent++;}},
+    logger: {debug() {}},
+  };
+  instance.unsubscribingConversationIds = new Set();
+  instance.hasActiveConversationView = () => true;
+  instance.hasOwnedStreamFollowers = () => false;
+  instance.shouldKeepConversationLoaded = () => false;
+  await instance.unsubscribeInactiveConversation('became-visible');
+  assert.equal(sent, 0);
+  instance.hasActiveConversationView = () => false;
+  await instance.unsubscribeInactiveConversation('idle');
+  assert.equal(sent, 1);
+});
+
+test("rejects rspack count, TTL, retry and layout drift", () => {
+  assert.throws(() => prepare(inlined.replace('maxInactiveOwnerThreads:10', 'maxInactiveOwnerThreads:12'), 2));
+  assert.throws(() => prepare(inlined.replaceAll('-10)', '-12)').replaceAll(':10,', ':12,'), 2));
+  assert.throws(() => prepare(inlined.replace('ttlMs:108e5', 'ttlMs:108e6'), 2));
+  assert.throws(() => prepare(inlined.replace('now()+15e3', 'now()+3e4'), 2));
+  assert.throws(() => prepare(inlined.replace('this.hasOwnedStreamFollowers(r)||', ''), 2));
+  assert.throws(() => prepare(inlined + inlined, 2));
+  assert.throws(() => prepare(inlined + source, 2));
+});
