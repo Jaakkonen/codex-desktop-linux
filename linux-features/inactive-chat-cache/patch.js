@@ -136,13 +136,13 @@ function prepareScopes(source, limit) {
   // Keep the native LRU and its mountedCount exclusion. Only its capacity changes.
   for (const name of ["ThreadScope", "RouteScope"]) {
     const anchor = new RegExp(
-      `(${identifier}\\(\\x60${name}\\x60,\\{key:[^;{}]+?,parent:${identifier},retain:\\{max:)(\\d+)(\\}\\}\\))`, "g",
+      `((?:${identifier}|\\(0,${identifier}\\.${identifier}\\))\\((\\x60|")${name}\\2,\\{key:[^;{}]+?,parent:${identifier}(?:\\.${identifier})?,retain:\\{max:)(\\d+)(\\}\\}\\))`, "g",
     );
     const matches = [...source.matchAll(anchor)];
     if (matches.length !== 1) throw new Error(`Expected one native ${name} retained cache`);
-    const count = Number(matches[0][2]);
+    const count = Number(matches[0][3]);
     if (count !== 20 && count !== limit) throw new Error(`Unexpected ${name} capacity`);
-    source = source.replace(anchor, (_, before, value, after) => before + limit + after);
+    source = source.replace(anchor, (_, before, quote, value, after) => before + limit + after);
   }
   return source;
 }
@@ -152,7 +152,8 @@ function apply(extractedDir, context = {}) {
   const scopeLimit = scopeMaximum(context);
   const targets = [];
   for (const directory of [".vite/build", "webview/assets"]) {
-    const candidates = fs.readdirSync(path.join(extractedDir, directory))
+    // Webview chunks moved into assets/async/ in 26.1111; search the tree.
+    const candidates = fs.readdirSync(path.join(extractedDir, directory), { recursive: true })
       .filter(name => name.endsWith(".js"))
       .map(name => path.join(extractedDir, directory, name))
       .map(file => ({ file, source: fs.readFileSync(file, "utf8") }))

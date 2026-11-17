@@ -168,3 +168,25 @@ test("rejects rspack count, TTL, retry and layout drift", () => {
   assert.throws(() => prepare(inlined + inlined, 2));
   assert.throws(() => prepare(inlined + source, 2));
 });
+
+// 26.1111: webview chunks live under assets/async/ and scope names are
+// double-quoted arguments of a namespaced factory call.
+const scopes261111 = 'let w=(0,i.z8)("ThreadScope",{key:u.D,parent:h.u,retain:{max:20}});let v=(0,i.z8)("RouteScope",{key:C,parent:g.l7,retain:{max:20}});';
+
+test("bounds 26.1111 scope caches in nested webview chunks", () => {
+  const patched = prepareScopes(scopes261111, 2);
+  assert.equal(patched, scopes261111.replaceAll("max:20", "max:2"));
+  assert.equal(prepareScopes(patched, 2), patched);
+  assert.throws(() => prepareScopes(scopes261111.replace('"RouteScope"', '"RouteScope`'), 2));
+  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'inactive-chat-cache-'));
+  try {
+    for (const folder of ['.vite/build','webview/assets/async']) fs.mkdirSync(path.join(dir,folder),{recursive:true});
+    const main=path.join(dir,'.vite/build/renamed.js'), view=path.join(dir,'webview/assets/async/renamed.js');
+    fs.writeFileSync(main,source);fs.writeFileSync(view,source + scopes261111);
+    fs.writeFileSync(path.join(dir,'webview/assets/entry.js'),'unrelated');
+    const context={feature:{settings:{maximumInactiveOwners:2,maximumRetainedScopes:2}}};
+    assert.deepEqual(apply(dir,context),{matched:2,changed:2,maximumInactiveOwners:2});
+    assert.match(fs.readFileSync(view,'utf8'),/"ThreadScope",\{key:u\.D,parent:h\.u,retain:\{max:2\}\}/);
+    assert.equal(apply(dir,context).changed,0);
+  } finally {fs.rmSync(dir,{recursive:true,force:true});}
+});
