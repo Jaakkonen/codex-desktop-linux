@@ -43,7 +43,7 @@ function surfaces(source, platform, { ready = true, enabled = true, legacy = fal
 test("unified Linux native selection uses the native setting and retains browser control", () => {
   assert.deepEqual(surfaces(selector, "linux"), ["browser"]);
   assert.deepEqual(surfaces(patch(selector), "linux"), ["browser", "computer"]);
-  assert.match(patch(selector), /build\(\{\.\.\.e,accessBootstrapPath:bootstrap\},i\)/);
+  assert.match(patch(selector), /build\(\{\.\.\.e,accessBootstrapPath:null\},i\)/);
   assert.match(patch(selector), /function build\(\{browserBackends:b,deferTools:d,surfaces:s,nodeRepl:n,accessBootstrapPath:a\},codexLinuxCuaPluginRoot\)/);
   assert.match(patch(selector), /\.sky=require\("node:path"\)\.join\(codexLinuxCuaPluginRoot,"scripts","native-service\.mjs"\)/);
   assert.match(patch(selector), /NODE_REPL_JS_BANNER:.*native-client\.mjs/);
@@ -191,7 +191,8 @@ test("unified helper avoids existing generated names in locals and nested scopes
 test("unified helper validates caller and helper root relationships separately", () => {
   const patched = patch(selector);
   for (const [from, to] of [
-    ["accessBootstrapPath:bootstrap},i)", "accessBootstrapPath:bootstrap},other)"],
+    ["accessBootstrapPath:null},i)", "accessBootstrapPath:null},other)"],
+    ["accessBootstrapPath:null},i)", "accessBootstrapPath:bootstrap},i)"],
     ['join(codexLinuxCuaPluginRoot,"scripts","native-service.mjs")', 'join(other,"scripts","native-service.mjs")'],
     ['join(codexLinuxCuaPluginRoot,"scripts","native-client.mjs")', 'join(other,"scripts","native-client.mjs")'],
   ]) {

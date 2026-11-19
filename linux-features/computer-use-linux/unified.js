@@ -299,7 +299,7 @@ function applyUnifiedComputerUseModulePatch(source) {
     calls[0].groups.rootArg == null && serviceCurrent && bannerCurrent &&
     (lifecycle.version === 2 || lifecycle.sync.groups.context == null) && lifecycle.resume.groups.root == null;
   const patched = Boolean(linux) && builder.groups.rootParam != null && calls.length === 1 &&
-    calls[0].groups.rootArg != null && servicePatched && bannerPatched &&
+    calls[0].groups.rootArg != null && calls[0].groups.accessBootstrapPath === "null" && servicePatched && bannerPatched &&
     (lifecycle.version === 2 || lifecycle.sync.groups.context != null) && lifecycle.resume.groups.root != null;
   if (!current && !patched) throw drift("expected one native trusted service selector");
   const service = current ? currentServices[0] : patchedServices[0];
@@ -369,7 +369,12 @@ function applyUnifiedComputerUseModulePatch(source) {
     {
       index: calls[0].index,
       length: calls[0][0].length,
-      replacement: publishRoot + calls[0][0].slice(0, -2) + `,${pluginRoot}` + calls[0][0].slice(-2),
+      // The plugin-cache entry is read by other Codex clients (CLI, T3), which
+      // have no desktop browser-access host. The desktop's own threads use the
+      // per-thread builder call, which never carries the bootstrap.
+      replacement: publishRoot + calls[0][0].slice(0, -2)
+        .replace(new RegExp(`accessBootstrapPath:${escapeRegExp(calls[0].groups.accessBootstrapPath)}\\}$`), "accessBootstrapPath:null}") +
+        `,${pluginRoot}` + calls[0][0].slice(-2),
     },
     ...(lifecycle.version === 1 ? [{
       index: lifecycle.sync.index,
