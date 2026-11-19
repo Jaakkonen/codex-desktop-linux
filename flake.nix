@@ -486,8 +486,19 @@
           linuxFeatureIds ? [ ],
           linuxFeatureSettings ? { },
           enableComputerUseUi ? false,
+          # Setup hooks added to every Rust helper this package embeds, such as
+          # a build host's persistent compiler cache.
+          rustHelperHooks ? [ ],
         }:
           let
+            withRustHelperHooks = helper:
+              if helper == null || rustHelperHooks == [ ] then helper
+              else helper.overrideAttrs (old: {
+                nativeBuildInputs = (old.nativeBuildInputs or [ ]) ++ rustHelperHooks;
+              });
+            dictationHelper = withRustHelperHooks globalDictationHelper;
+            kwinHelper = withRustHelperHooks petKwinHelper;
+            reaperHelper = withRustHelperHooks mcpReaperHelper;
             userFeatureIds = nixLinuxFeatures.normalize (
               linuxFeatureIds ++ lib.optional enableComputerUseUi "computer-use-linux"
             );
@@ -498,7 +509,7 @@
             recordReplayBackendEnabled =
               lib.elem "chronicle-skysight" effectiveFeatureIds
               || lib.elem "record-and-replay" effectiveFeatureIds;
-            workspaceHelpers = mkWorkspaceHelpers effectiveFeatureIds;
+            workspaceHelpers = withRustHelperHooks (mkWorkspaceHelpers effectiveFeatureIds);
             watchboundEnabled = lib.elem "directory-only-working-tree-watch" effectiveFeatureIds;
             # This addon is already linked by Nix before its authenticated
             # package metadata and ASAR header are generated. A second ELF
@@ -575,13 +586,13 @@
               export CODEX_RECORD_REPLAY_LINUX_SOURCE="${workspaceHelpers}/bin/codex-record-replay-linux"
               ''}
               ${lib.optionalString (lib.elem "global-dictation" effectiveFeatureIds || lib.elem "wayland-global-shortcuts" effectiveFeatureIds) ''
-              export CODEX_GLOBAL_DICTATION_LINUX_SOURCE="${globalDictationHelper}/bin/codex-global-dictation-linux"
+              export CODEX_GLOBAL_DICTATION_LINUX_SOURCE="${dictationHelper}/bin/codex-global-dictation-linux"
               ''}
               ${lib.optionalString (lib.elem "pet-overlay" effectiveFeatureIds) ''
-              export CODEX_PET_KWIN_SOURCE="${petKwinHelper}/bin/codex-pet-kwin"
+              export CODEX_PET_KWIN_SOURCE="${kwinHelper}/bin/codex-pet-kwin"
               ''}
               ${lib.optionalString (lib.elem "mcp-helper-reaper" effectiveFeatureIds) ''
-              export CODEX_MCP_HELPER_REAPER_SOURCE="${mcpReaperHelper}/bin/codex-mcp-helper-reaper"
+              export CODEX_MCP_HELPER_REAPER_SOURCE="${reaperHelper}/bin/codex-mcp-helper-reaper"
               ''}
               ${lib.optionalString watchboundEnabled ''
               export CODEX_WATCHBOUND_PACKAGE_ROOT="${watchboundPackage}/lib/node_modules"
